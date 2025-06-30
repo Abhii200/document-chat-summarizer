@@ -13,6 +13,15 @@ import asyncio
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Try to import EasyOCR as fallback
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+    print("📄 EasyOCR available as fallback")
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    print("⚠️ EasyOCR not available")
+
 # Load environment variables
 load_dotenv()
 
@@ -51,8 +60,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Set Tesseract path
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+# Set Tesseract path with error handling
+try:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+    # Test if tesseract is working
+    pytesseract.get_tesseract_version()
+    TESSERACT_AVAILABLE = True
+    print("✅ Tesseract OCR is available")
+except Exception as e:
+    TESSERACT_AVAILABLE = False
+    print(f"⚠️ Tesseract not available: {e}")
+
+# Initialize EasyOCR reader if available and tesseract fails
+ocr_reader = None
+if EASYOCR_AVAILABLE and not TESSERACT_AVAILABLE:
+    try:
+        ocr_reader = easyocr.Reader(['en'])
+        print("✅ EasyOCR initialized as fallback")
+    except Exception as e:
+        print(f"⚠️ EasyOCR initialization failed: {e}")
 
 # Store for document sessions
 document_store = {}
@@ -67,20 +93,48 @@ class DocumentResponse(BaseModel):
     summary: str
 
 # ----- OCR Functions -----
+def extract_text_with_ocr(img):
+    """Extract text from image using available OCR method"""
+    if TESSERACT_AVAILABLE:
+        try:
+            return pytesseract.image_to_string(img)
+        except Exception as e:
+            print(f"⚠️ Tesseract failed: {e}")
+    
+    if ocr_reader is not None:
+        try:
+            # Convert PIL image to numpy array for EasyOCR
+            import numpy as np
+            img_array = np.array(img)
+            results = ocr_reader.readtext(img_array)
+            # Extract text from results
+            text = " ".join([result[1] for result in results])
+            return text
+        except Exception as e:
+            print(f"⚠️ EasyOCR failed: {e}")
+    
+    raise HTTPException(status_code=500, detail="No OCR method available. Please contact support.")
+
 def extract_text_from_pdf(pdf_path):
     print("📄 Converting PDF to images...")
-    images = convert_from_path(pdf_path)
-    full_text = ""
-    for i, img in enumerate(images):
-        print(f"🔍 OCR on page {i+1}...")
-        text = pytesseract.image_to_string(img)
-        full_text += text + "\n\n"
-    return full_text.strip()
+    try:
+        images = convert_from_path(pdf_path)
+        full_text = ""
+        for i, img in enumerate(images):
+            print(f"🔍 OCR on page {i+1}...")
+            text = extract_text_with_ocr(img)
+            full_text += text + "\n\n"
+        return full_text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF processing failed: {str(e)}")
 
 def extract_text_from_image(image_path):
     print(f"🔍 OCR on image: {image_path}")
-    img = Image.open(image_path)
-    return pytesseract.image_to_string(img).strip()
+    try:
+        img = Image.open(image_path)
+        return extract_text_with_ocr(img)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
 
 def chunk_text(text, max_words=1500):
     words = text.split()
