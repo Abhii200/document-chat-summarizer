@@ -1,5 +1,10 @@
 @echo off
-echo Starting DocuMind Application...
+title DocuMind - AI Document Summarizer
+color 0A
+
+echo ================================================================
+echo                    DocuMind - AI Document Summarizer
+echo ================================================================
 echo.
 
 REM Check if backend .env exists
@@ -11,6 +16,16 @@ if not exist "backend\.env" (
     exit /b 1
 )
 
+REM Check if virtual environment exists
+if not exist "backend\openr\Scripts\activate.bat" (
+    echo ⚠️  Virtual environment not found. Creating one...
+    cd backend
+    python -m venv openr
+    call openr\Scripts\activate.bat
+    pip install -r requirements.txt
+    cd ..
+)
+
 REM Check if frontend .env exists
 if not exist "frontend\.env" (
     echo ⚠️  Frontend .env file not found. Creating from template...
@@ -18,18 +33,25 @@ if not exist "frontend\.env" (
 )
 
 echo [1/2] Starting Backend Server...
-cd backend
-start "Backend Server" cmd /k "python main.py"
+start "DocuMind Backend" cmd /k "cd /d backend && openr\Scripts\activate && python main.py"
+
+echo Waiting for backend to start...
+timeout /t 3 /nobreak >nul
 
 echo [2/2] Starting Frontend Development Server...
-cd ../frontend
-start "Frontend Server" cmd /k "npm start"
+start "DocuMind Frontend" cmd /k "cd /d frontend && npm start"
 
 echo.
-echo ✅ Both servers are starting!
+echo ================================================================
+echo                        DocuMind Started!
+echo ================================================================
 echo.
-echo Backend API: http://localhost:8000
-echo Frontend App: http://localhost:3000
+echo Backend API:  http://localhost:8000
+echo API Docs:     http://localhost:8000/docs  
+echo Frontend:     http://localhost:3000
 echo.
-echo Press any key to exit...
-pause > nul
+echo Both servers are running in separate windows.
+echo Close this window when you're done.
+echo ================================================================
+echo.
+pause

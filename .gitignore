@@ -14,6 +14,7 @@ backend/.Python
 backend/env/
 backend/venv/
 backend/.venv/
+backend/openr/
 backend/pip-log.txt
 backend/pip-delete-this-directory.txt
 backend/.pytest_cache/

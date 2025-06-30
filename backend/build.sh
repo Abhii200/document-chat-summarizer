@@ -7,7 +7,6 @@ echo "📦 Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-echo "🌐 Using cloud-based OCR - no memory overhead!"
 echo "✅ Build completed successfully!"
 
 # Check Python dependencies
