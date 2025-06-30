@@ -8,7 +8,7 @@ import requests
 import json
 
 # API Configuration
-OPENROUTER_API_KEY = "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"  # Replace with your actual API key
+OPENROUTER_API_KEY = "your-api-key"  # Replace with your actual API key
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_NAME = "google/gemma-3n-e4b-it:free"
 
