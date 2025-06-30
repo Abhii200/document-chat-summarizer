@@ -1,7 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
 import requests
@@ -12,37 +11,26 @@ from typing import Optional
 import asyncio
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-# Try to import EasyOCR as fallback
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-    print("📄 EasyOCR available as fallback")
-except ImportError:
-    EASYOCR_AVAILABLE = False
-    print("⚠️ EasyOCR not available")
+import base64
+import io
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Document Summarizer API", version="1.0.0")
+# Initialize FastAPI app
+app = FastAPI(
+    title="DocuMind - AI Document Summarizer", 
+    version="2.0.0",
+    description="AI-powered document summarizer with OCR and Q&A capabilities"
+)
 
 # Environment variables
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
-MODEL_NAME = os.getenv("MODEL_NAME", "google/gemma-3n-e4b-it:free")
+DEFAULT_MODEL = os.getenv("MODEL_NAME", "google/gemma-3n-e4b-it:free")
+VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct:free"
 
-# Tesseract path - different for local vs Render
-TESSERACT_PATH = os.getenv("TESSERACT_PATH")
-if not TESSERACT_PATH:
-    # Default paths for different environments
-    if os.path.exists("/usr/bin/tesseract"):  # Linux (Render)
-        TESSERACT_PATH = "/usr/bin/tesseract"
-    elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):  # Windows
-        TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    else:
-        TESSERACT_PATH = "tesseract"  # Hope it's in PATH
-
+# Server configuration
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
@@ -50,6 +38,9 @@ PORT = int(os.getenv("PORT", 8000))
 # Validate required environment variables
 if not OPENROUTER_API_KEY:
     raise ValueError("OPENROUTER_API_KEY environment variable is required")
+
+# Create uploads directory
+os.makedirs("uploads", exist_ok=True)
 
 # CORS middleware
 app.add_middleware(
@@ -60,29 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Set Tesseract path with error handling
-try:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
-    # Test if tesseract is working
-    pytesseract.get_tesseract_version()
-    TESSERACT_AVAILABLE = True
-    print("✅ Tesseract OCR is available")
-except Exception as e:
-    TESSERACT_AVAILABLE = False
-    print(f"⚠️ Tesseract not available: {e}")
+print("=" * 60)
+print("🚀 DocuMind API Server Initializing...")
+print("=" * 60)
+print("🦙 OCR Engine: Llama 3.2 Vision (Free)")
+print(f"🤖 Default Model: {DEFAULT_MODEL}")
+print(f"🌐 CORS Origins: {CORS_ORIGINS}")
+print("=" * 60)
 
-# Initialize EasyOCR reader if available and tesseract fails
-ocr_reader = None
-if EASYOCR_AVAILABLE and not TESSERACT_AVAILABLE:
-    try:
-        ocr_reader = easyocr.Reader(['en'])
-        print("✅ EasyOCR initialized as fallback")
-    except Exception as e:
-        print(f"⚠️ EasyOCR initialization failed: {e}")
-
-# Store for document sessions
-document_store = {}
-
+# Data models
 class QuestionRequest(BaseModel):
     document_id: str
     question: str
@@ -92,58 +69,102 @@ class DocumentResponse(BaseModel):
     extracted_text: str
     summary: str
 
-# ----- OCR Functions -----
-def extract_text_with_ocr(img):
-    """Extract text from image using available OCR method"""
-    if TESSERACT_AVAILABLE:
-        try:
-            return pytesseract.image_to_string(img)
-        except Exception as e:
-            print(f"⚠️ Tesseract failed: {e}")
-    
-    if ocr_reader is not None:
-        try:
-            # Convert PIL image to numpy array for EasyOCR
-            import numpy as np
-            img_array = np.array(img)
-            results = ocr_reader.readtext(img_array)
-            # Extract text from results
-            text = " ".join([result[1] for result in results])
-            return text
-        except Exception as e:
-            print(f"⚠️ EasyOCR failed: {e}")
-    
-    raise HTTPException(status_code=500, detail="No OCR method available. Please contact support.")
+# Document store for sessions
+document_store = {}
 
-def extract_text_from_pdf(pdf_path):
+# Constants
+MAX_IMAGE_SIZE = 1024
+MAX_TEXT_CHUNK_WORDS = 1500
+MAX_SUMMARY_TOKENS = 300
+MAX_QA_TOKENS = 500
+
+# ----- Core Functions -----
+
+def prepare_image_for_vision(img):
+    """Prepare image for vision model processing"""
+    buffer = io.BytesIO()
+    
+    # Optimize image size for vision model
+    if img.width > MAX_IMAGE_SIZE or img.height > MAX_IMAGE_SIZE:
+        img.thumbnail((MAX_IMAGE_SIZE, MAX_IMAGE_SIZE), Image.Resampling.LANCZOS)
+        print(f"📏 Resized image to {img.width}x{img.height}")
+    
+    img.save(buffer, format='PNG')
+    return base64.b64encode(buffer.getvalue()).decode()
+
+async def extract_text_with_vision(img):
+    """Extract text from image using Llama 3.2 Vision model"""
+    try:
+        img_b64 = prepare_image_for_vision(img)
+        print("🦙 Processing with Llama Vision...")
+        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extract ALL text from this image. Return ONLY the text content, preserving formatting, line breaks, and structure as much as possible. Do not add any explanations or comments."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_b64}"
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        response = await call_openrouter_api(messages, model=VISION_MODEL, max_tokens=2000)
+        extracted_text = response.strip()
+        print(f"✅ Vision OCR extracted {len(extracted_text)} characters")
+        return extracted_text
+        
+    except Exception as e:
+        print(f"❌ Vision OCR failed: {e}")
+        raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+
+async def extract_text_from_pdf(pdf_path):
+    """Extract text from PDF by converting to images and using vision OCR"""
     print("📄 Converting PDF to images...")
     try:
         images = convert_from_path(pdf_path)
         full_text = ""
+        
         for i, img in enumerate(images):
-            print(f"🔍 OCR on page {i+1}...")
-            text = extract_text_with_ocr(img)
-            full_text += text + "\n\n"
+            print(f"🔍 Processing page {i+1}/{len(images)}...")
+            text = await extract_text_with_vision(img)
+            if text.strip():
+                full_text += text + "\n\n"
+        
         return full_text.strip()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF processing failed: {str(e)}")
 
-def extract_text_from_image(image_path):
-    print(f"🔍 OCR on image: {image_path}")
+async def extract_text_from_image(image_path):
+    """Extract text from image file using vision OCR"""
+    print(f"🔍 Processing image: {os.path.basename(image_path)}")
     try:
         img = Image.open(image_path)
-        return extract_text_with_ocr(img)
+        return await extract_text_with_vision(img)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
 
-def chunk_text(text, max_words=1500):
+def chunk_text(text, max_words=None):
+    """Split text into manageable chunks for processing"""
+    max_words = max_words or MAX_TEXT_CHUNK_WORDS
     words = text.split()
     return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
 # ----- API Helper -----
-async def call_openrouter_api(messages, max_tokens=300):
+async def call_openrouter_api(messages, max_tokens=300, model=None):
     """Make API call to OpenRouter"""
     print("🌐 Making API call to OpenRouter...")
+    
+    # Use custom model or default
+    selected_model = model or DEFAULT_MODEL
+    print(f"📱 Using model: {selected_model}")
     
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -153,7 +174,7 @@ async def call_openrouter_api(messages, max_tokens=300):
     }
     
     data = {
-        "model": MODEL_NAME,
+        "model": selected_model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.7
@@ -171,38 +192,38 @@ async def call_openrouter_api(messages, max_tokens=300):
         print(f"❌ Response Error: {e}")
         raise HTTPException(status_code=500, detail="Invalid API response")
 
-async def summarize_text(text):
-    """Summarize text using OpenRouter API"""
-    prompt = f"Summarize the following document in a clear and concise manner:\n\n{text[:2000]}"
-    
-    messages = [
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ]
-    
-    return await call_openrouter_api(messages)
+# ----- AI Processing Functions -----
 
-async def ask_question_api(context, question):
-    """Answer questions about the document using OpenRouter API"""
-    prompt = f"""You are a helpful assistant. Answer the question based on the provided document.
+async def summarize_text(text):
+    """Generate summary using AI"""
+    # Truncate text if too long
+    max_chars = 4000
+    truncated_text = text[:max_chars] + "..." if len(text) > max_chars else text
+    
+    prompt = f"""Summarize the following document in a clear, concise, and well-structured manner. Focus on the main points and key information:
+
+{truncated_text}"""
+    
+    messages = [{"role": "user", "content": prompt}]
+    return await call_openrouter_api(messages, max_tokens=MAX_SUMMARY_TOKENS)
+
+async def answer_question(context, question):
+    """Answer questions about the document using AI"""
+    # Truncate context if too long
+    max_chars = 5000
+    truncated_context = context[:max_chars] + "..." if len(context) > max_chars else context
+    
+    prompt = f"""Based on the following document, answer the question accurately and concisely:
 
 Document:
-\"\"\"{context[:3000]}\"\"\"
+{truncated_context}
 
 Question: {question}
 
 Answer:"""
     
-    messages = [
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ]
-    
-    return await call_openrouter_api(messages)
+    messages = [{"role": "user", "content": prompt}]
+    return await call_openrouter_api(messages, max_tokens=MAX_QA_TOKENS)
 
 # ----- API Endpoints -----
 @app.get("/")
@@ -232,9 +253,9 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Extract text
         if file.content_type == "application/pdf":
-            extracted_text = extract_text_from_pdf(file_path)
+            extracted_text = await extract_text_from_pdf(file_path)
         else:
-            extracted_text = extract_text_from_image(file_path)
+            extracted_text = await extract_text_from_image(file_path)
         
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="No text could be extracted from the document.")
@@ -276,7 +297,7 @@ async def ask_question(request: QuestionRequest):
         raise HTTPException(status_code=404, detail="Document not found. Please upload a document first.")
     
     document_data = document_store[request.document_id]
-    answer = await ask_question_api(document_data["text"], request.question)
+    answer = await answer_question(document_data["text"], request.question)
     
     return {"answer": answer}
 
@@ -314,4 +335,33 @@ async def delete_document(document_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    import logging
+    
+    # Reduce uvicorn logging noise
+    logging.getLogger("uvicorn.access").disabled = True
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    
+    print("=" * 50)
+    print("🚀 DocuMind API Server Starting...")
+    print("=" * 50)
+    print(f"📍 Local URL: http://localhost:{PORT}")
+    print(f"📚 API Docs: http://localhost:{PORT}/docs")
+    print(f"🌐 CORS enabled for: {CORS_ORIGINS}")
+    print("=" * 50)
+    
+    try:
+        # Configure uvicorn for Windows development
+        uvicorn.run(
+            "main:app",  # Import string instead of app object
+            host="127.0.0.1",  # Use localhost instead of 0.0.0.0 for Windows
+            port=PORT,
+            log_level="warning",  # Reduce log noise
+            access_log=False,
+            server_header=False,
+            reload=True,  # Auto-reload on file changes
+            reload_dirs=["./"],  # Watch current directory
+        )
+    except KeyboardInterrupt:
+        print("\n👋 Server stopped gracefully")
+    except Exception as e:
+        print(f"❌ Server error: {e}")
