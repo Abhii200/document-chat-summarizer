@@ -41,9 +41,12 @@
    ```
    Name: documind-backend
    Environment: Python 3
-   Build Command: cd backend && chmod +x build.sh && ./build.sh
-   Start Command: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+   Root Directory: backend
+   Build Command: chmod +x build.sh && ./build.sh
+   Start Command: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
    ```
+
+   **Important**: Set "Root Directory" to `backend` so Render runs commands from the backend folder.
 
 ### Step 3: Set Environment Variables
 

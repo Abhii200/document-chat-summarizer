@@ -1,18 +1,21 @@
-# Render Deployment Configuration
-buildCommand: cd backend && pip install -r requirements.txt
-startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
-envVars:
-  - key: PYTHON_VERSION
-    value: 3.11.0
-  - key: OPENROUTER_API_KEY
-    value: your_openrouter_api_key_here
-  - key: OPENROUTER_URL  
-    value: https://openrouter.ai/api/v1/chat/completions
-  - key: MODEL_NAME
-    value: google/gemma-3n-e4b-it:free
-  - key: TESSERACT_PATH
-    value: /usr/bin/tesseract
-  - key: CORS_ORIGINS
-    value: https://your-frontend-domain.onrender.com,http://localhost:3000
-  - key: HOST
-    value: 0.0.0.0
+services:
+  - type: web
+    name: documind-backend
+    env: python
+    buildCommand: cd backend && chmod +x build.sh && ./build.sh
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: OPENROUTER_API_KEY
+        value: your_openrouter_api_key_here
+      - key: OPENROUTER_URL  
+        value: https://openrouter.ai/api/v1/chat/completions
+      - key: MODEL_NAME
+        value: google/gemma-3n-e4b-it:free
+      - key: TESSERACT_PATH
+        value: /usr/bin/tesseract
+      - key: CORS_ORIGINS
+        value: https://your-frontend-domain.onrender.com,http://localhost:3000
+      - key: HOST
+        value: 0.0.0.0
