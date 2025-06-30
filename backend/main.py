@@ -20,12 +20,23 @@ app = FastAPI(title="Document Summarizer API", version="1.0.0")
 
 # Environment variables
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_URL = os.getenv("OPENROUTER_URL")
-MODEL_NAME = os.getenv("MODEL_NAME")
+OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
+MODEL_NAME = os.getenv("MODEL_NAME", "google/gemma-3n-e4b-it:free")
+
+# Tesseract path - different for local vs Render
 TESSERACT_PATH = os.getenv("TESSERACT_PATH")
-CORS_ORIGINS = os.getenv("CORS_ORIGINS").split(",")
-HOST = os.getenv("HOST")
-PORT = int(os.getenv("PORT"))
+if not TESSERACT_PATH:
+    # Default paths for different environments
+    if os.path.exists("/usr/bin/tesseract"):  # Linux (Render)
+        TESSERACT_PATH = "/usr/bin/tesseract"
+    elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):  # Windows
+        TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    else:
+        TESSERACT_PATH = "tesseract"  # Hope it's in PATH
+
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", 8000))
 
 # Validate required environment variables
 if not OPENROUTER_API_KEY:
